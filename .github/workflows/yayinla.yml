@@ -1,10 +1,13 @@
 name: Sürümü yayınla
 
-# Özel depodaki derleme iş akışı, "v*" etiketiyle yalnızca yukle/ klasörünü (exe + imzalı surum.json + notlar) içeren bir işleme gönderir;
-# bu iş akışı oradan GitHub Sürümü (Releases) oluşturur. Programın güncelleme kaynağı "latest" sürümdeki surum.json'dur.
+# Sürüm dosyaları "yukle/vX.Y.Z" dalıyla gelir (özel depodaki derleme iş akışı ya da yerel yayın betiği gönderir).
+# Dalın "yukle/" klasöründeki dosyalar vX.Y.Z sürümüne eklenir: sürüm yoksa oluşturulur ("latest" olur), varsa dosyalar eklenir/yenilenir.
+#   Windows: BoruKatlama.exe + surum.json        macOS: BoruKatlama-X.Y.Z-macos.zip + surum-macos.json        notlar.md: sürüm notları
+# Böylece macOS ve Windows dosyaları farklı zamanlarda aynı sürüme eklenebilir. Programlar güncelleme kaynağı olarak
+# "latest" sürümdeki surum.json (Windows) / surum-macos.json (macOS) dosyasına bakar; bildirimler imzalıdır.
 on:
   push:
-    tags: ['v*']
+    branches: ['yukle/**']
 
 permissions:
   contents: write
@@ -15,14 +18,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Sürümü oluştur
+      - name: Sürüme ekle
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          for f in yukle/BoruKatlama.exe yukle/surum.json; do
-            [ -s "$f" ] || { echo "::error::$f yok"; exit 1; }
+          tag="${GITHUB_REF_NAME#yukle/}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Etiket biçimi geçersiz: $tag"; exit 1; }
+          [ -d yukle ] || { echo "::error::yukle/ klasörü yok"; exit 1; }
+          dosyalar=()
+          for f in yukle/*; do
+            [ "$(basename "$f")" = notlar.md ] && continue
+            [ -s "$f" ] || { echo "::error::$f boş"; exit 1; }
+            dosyalar+=("$f")
           done
-          args=(--title "Boru Katlama Stüdyosu $GITHUB_REF_NAME" --latest --verify-tag)
-          if [ -s yukle/notlar.md ]; then args+=(--notes-file yukle/notlar.md); else args+=(--notes "Boru Katlama Stüdyosu $GITHUB_REF_NAME"); fi
-          gh release create "$GITHUB_REF_NAME" yukle/BoruKatlama.exe yukle/surum.json "${args[@]}"
+          [ ${#dosyalar[@]} -gt 0 ] || { echo "::error::yüklenecek dosya yok"; exit 1; }
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${dosyalar[@]}" --clobber
+          else
+            args=(--title "Boru Katlama Stüdyosu $tag" --latest)
+            if [ -s yukle/notlar.md ]; then args+=(--notes-file yukle/notlar.md); else args+=(--notes "Boru Katlama Stüdyosu $tag"); fi
+            gh release create "$tag" "${dosyalar[@]}" "${args[@]}"
+          fi
+          git push origin --delete "$GITHUB_REF_NAME" || true
