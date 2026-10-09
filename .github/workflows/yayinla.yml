@@ -1,0 +1,28 @@
+name: Sürümü yayınla
+
+# Özel depodaki derleme iş akışı, "v*" etiketiyle yalnızca yukle/ klasörünü (exe + imzalı surum.json + notlar) içeren bir işleme gönderir;
+# bu iş akışı oradan GitHub Sürümü (Releases) oluşturur. Programın güncelleme kaynağı "latest" sürümdeki surum.json'dur.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  yayinla:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Sürümü oluştur
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for f in yukle/BoruKatlama.exe yukle/surum.json; do
+            [ -s "$f" ] || { echo "::error::$f yok"; exit 1; }
+          done
+          args=(--title "Boru Katlama Stüdyosu $GITHUB_REF_NAME" --latest --verify-tag)
+          if [ -s yukle/notlar.md ]; then args+=(--notes-file yukle/notlar.md); else args+=(--notes "Boru Katlama Stüdyosu $GITHUB_REF_NAME"); fi
+          gh release create "$GITHUB_REF_NAME" yukle/BoruKatlama.exe yukle/surum.json "${args[@]}"
