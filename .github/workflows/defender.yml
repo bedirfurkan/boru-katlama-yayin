@@ -1,0 +1,44 @@
+# Windows Defender ile tarama (yanlış alarm denetimi): elle başlatılır. Sürüm etiketlerindeki ya da taslak (yayınlanmamış) deneme
+# sürümlerindeki BoruKatlama.exe dosyalarını güncel Defender imzaları ve bulut korumasıyla tarar.
+name: Defender taraması
+on:
+  workflow_dispatch:
+    inputs:
+      etiketler:
+        description: 'Taranacak sürüm etiketleri (boşlukla ayrılmış; taslak sürümler de olur)'
+        default: 'v2.8.6'
+permissions:
+  contents: read
+jobs:
+  tara:
+    runs-on: windows-latest
+    steps:
+      - name: Defender durumu ve imza güncellemesi
+        shell: pwsh
+        run: |
+          Set-MpPreference -MAPSReporting Advanced -CloudBlockLevel High -CloudExtendedTimeout 30 -ErrorAction SilentlyContinue
+          Update-MpSignature -ErrorAction SilentlyContinue
+          Get-MpComputerStatus | Select-Object AMEngineVersion, AntivirusSignatureVersion, AntivirusSignatureLastUpdated, RealTimeProtectionEnabled | Format-List
+          Get-MpPreference | Select-Object MAPSReporting, SubmitSamplesConsent, CloudBlockLevel | Format-List
+      - name: İndir ve tara
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ETIKETLER: ${{ inputs.etiketler }}
+        run: |
+          $kok = Join-Path $env:RUNNER_TEMP 'tara'
+          foreach ($t in $env:ETIKETLER.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)) {
+            $d = Join-Path $kok $t
+            New-Item -ItemType Directory -Force $d | Out-Null
+            gh release download $t -R $env:GITHUB_REPOSITORY -p '*.exe' -D $d
+          }
+          $mp = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+          foreach ($f in Get-ChildItem $kok -Recurse -File -Filter *.exe) {
+            $h = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
+            Write-Host "=== $($f.FullName) sha256=$h boyut=$($f.Length)"
+            & $mp -Scan -ScanType 3 -File $f.FullName -DisableRemediation | Out-Host
+            Write-Host "çıkış kodu: $LASTEXITCODE (0 = temiz, 2 = tehdit bulundu)"
+          }
+          Write-Host '--- tespitler'
+          Get-MpThreatDetection | Select-Object ThreatID, InitialDetectionTime, Resources | Format-List | Out-Host
+          Get-MpThreat | Select-Object ThreatName, ThreatID, SeverityID | Format-List | Out-Host
