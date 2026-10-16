@@ -16,10 +16,11 @@ jobs:
       - name: Defender durumu ve imza güncellemesi
         shell: pwsh
         run: |
-          Set-MpPreference -MAPSReporting Advanced -CloudBlockLevel High -CloudExtendedTimeout 30 -ErrorAction SilentlyContinue
+          # gerçek kullanıcıdaki gibi: gerçek zamanlı koruma + bulut koruması + ilk görüşte engelleme (örnek gönderimi açık)
+          Set-MpPreference -DisableRealtimeMonitoring $false -DisableBlockAtFirstSeen $false -MAPSReporting Advanced -SubmitSamplesConsent SendAllSamples -CloudBlockLevel High -CloudExtendedTimeout 50 -ErrorAction SilentlyContinue
           Update-MpSignature -ErrorAction SilentlyContinue
           Get-MpComputerStatus | Select-Object AMEngineVersion, AntivirusSignatureVersion, AntivirusSignatureLastUpdated, RealTimeProtectionEnabled | Format-List
-          Get-MpPreference | Select-Object MAPSReporting, SubmitSamplesConsent, CloudBlockLevel | Format-List
+          Get-MpPreference | Select-Object DisableRealtimeMonitoring, DisableBlockAtFirstSeen, MAPSReporting, SubmitSamplesConsent, CloudBlockLevel | Format-List
       - name: İndir ve tara
         shell: pwsh
         env:
@@ -33,11 +34,24 @@ jobs:
             gh release download $t -R $env:GITHUB_REPOSITORY -p '*.exe' -D $d
           }
           $mp = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+          $indir = Join-Path $env:USERPROFILE 'Downloads\deneme'
+          New-Item -ItemType Directory -Force $indir | Out-Null
           foreach ($f in Get-ChildItem $kok -Recurse -File -Filter *.exe) {
             $h = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
             Write-Host "=== $($f.FullName) sha256=$h boyut=$($f.Length)"
-            & $mp -Scan -ScanType 3 -File $f.FullName -DisableRemediation | Out-Host
-            Write-Host "çıkış kodu: $LASTEXITCODE (0 = temiz, 2 = tehdit bulundu)"
+            # tarayıcıdan indirilmiş gibi: İnternet bölgesi işareti (Mark of the Web) ile İndirilenler'e yaz (gerçek zamanlı tarama tetiklenir)
+            $hedef = Join-Path $indir ($f.Directory.Name + '-' + $f.Name)
+            [IO.File]::WriteAllBytes($hedef, [IO.File]::ReadAllBytes($f.FullName))
+            Set-Content -Path $hedef -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3`r`nHostUrl=https://github.com/$env:GITHUB_REPOSITORY/releases/download/x/BoruKatlama.exe"
+            Start-Sleep -Seconds 20
+            Write-Host "indirilen dosya duruyor mu: $(Test-Path $hedef)"
+            if (Test-Path $hedef) {
+              & $mp -Scan -ScanType 3 -File $hedef -DisableRemediation | Out-Host
+              Write-Host "çıkış kodu: $LASTEXITCODE (0 = temiz, 2 = tehdit bulundu)"
+              try { $p = Start-Process $hedef -PassThru -ErrorAction Stop; Start-Sleep -Seconds 25; Write-Host "çalıştı, süreç kapandı mı: $($p.HasExited)"; if (-not $p.HasExited) { $p.Kill() } } catch { Write-Host "çalıştırılamadı: $($_.Exception.Message)" }
+              Start-Sleep -Seconds 5
+              Write-Host "çalıştırma sonrası dosya duruyor mu: $(Test-Path $hedef)"
+            }
           }
           Write-Host '--- tespitler'
           Get-MpThreatDetection | Select-Object ThreatID, InitialDetectionTime, Resources | Format-List | Out-Host
